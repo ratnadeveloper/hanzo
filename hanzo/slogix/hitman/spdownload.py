@@ -1411,7 +1411,7 @@ async def hitman_search(query: str, title: str = "", artist: str = ""):
 
 
 def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "downloads"):
-    """Download audio from YouTube as MP3 (fallback for JioSaavn)."""
+    """Download audio via yt-dlp. Tries YouTube first, then SoundCloud fallback."""
     if not yt_dlp:
         logger.error("yt-dlp not installed, cannot use YouTube fallback")
         return None
@@ -1419,7 +1419,7 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
     safe_name = re.sub(r'[<>:"/\\|?*]', "_", f"{artist} - {title}")[:150]
     output_template = os.path.join(download_dir, f"{safe_name}.%(ext)s")
 
-    ydl_opts = {
+    base_opts = {
         "format": "bestaudio/best",
         "outtmpl": output_template,
         "quiet": True,
@@ -1427,18 +1427,6 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
         "geo_bypass": True,
         "nocheckcertificate": True,
         "prefer_ffmpeg": True,
-        "no_check_formats": True,
-        "allow_unplayable_formats": True,
-        # web_creator client bypasses bot detection on server IPs
-        # without needing cookies or PO tokens
-        "extractor_args": {"youtube": {"player_client": ["web_creator", "mweb", "ios"]}},
-        "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/126.0.0.0 Safari/537.36"
-            )
-        },
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -1448,20 +1436,43 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
         ],
     }
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([yt_url])
-    except Exception as e:
-        logger.error(f"yt-dlp fallback error: {e}")
-        return None
+    # Sources to try in order
+    sources = [
+        {
+            "name": "YouTube",
+            "url": yt_url,
+            "extra_opts": {
+                "extractor_args": {"youtube": {"player_client": ["web_creator"]}},
+            },
+        },
+        {
+            "name": "SoundCloud",
+            "url": f"scsearch1:{title} {artist}",
+            "extra_opts": {},
+        },
+    ]
 
-    expected = os.path.join(download_dir, f"{safe_name}.mp3")
-    if os.path.exists(expected):
-        return expected
-    # Check for any file with the safe name (could be .m4a, .webm, etc)
-    for f in os.listdir(download_dir):
-        if f.startswith(safe_name):
-            return os.path.join(download_dir, f)
+    for src in sources:
+        try:
+            opts = {**base_opts, **src["extra_opts"]}
+            logger.info(f"yt-dlp trying {src['name']}: {src['url']}")
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([src["url"]])
+
+            # Check if file was downloaded
+            expected = os.path.join(download_dir, f"{safe_name}.mp3")
+            if os.path.exists(expected):
+                logger.info(f"yt-dlp {src['name']} success: {expected}")
+                return expected
+            for f in os.listdir(download_dir):
+                if f.startswith(safe_name):
+                    logger.info(f"yt-dlp {src['name']} success: {f}")
+                    return os.path.join(download_dir, f)
+
+        except Exception as e:
+            logger.error(f"yt-dlp {src['name']} error: {e}")
+            continue
+
     return None
 
 
