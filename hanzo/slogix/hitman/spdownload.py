@@ -1372,12 +1372,12 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
         "geo_bypass": True,
         "nocheckcertificate": True,
         "prefer_ffmpeg": True,
-        # Use Android player client to bypass bot detection on server IPs
-        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+        # Use iOS + Android player clients to bypass bot detection on server IPs
+        "extractor_args": {"youtube": {"player_client": ["ios", "android", "web"]}},
         "http_headers": {
             "User-Agent": (
-                "com.google.android.youtube/19.29.37 "
-                "(Linux; U; Android 14) gzip"
+                "com.google.ios.youtube/19.29.1 "
+                "(iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)"
             )
         },
         "postprocessors": [
@@ -1388,8 +1388,18 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
             }
         ],
     }
-    # NOTE: cookies.txt intentionally NOT used here.
-    # Expired/bad cookies cause YouTube to restrict available formats.
+    # Use cookies to authenticate on server IPs where YouTube blocks bots
+    cookie_paths = [
+        os.path.join(os.path.dirname(__file__), "..", "..", "assets", "cookies.txt"),
+        os.path.join(os.path.dirname(__file__), "..", "..", "hanzofy", "cookies.txt"),
+        "cookies.txt",
+    ]
+    for cp in cookie_paths:
+        cp = os.path.abspath(cp)
+        if os.path.exists(cp):
+            ydl_opts["cookiefile"] = cp
+            logger.info(f"yt-dlp using cookies: {cp}")
+            break
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
