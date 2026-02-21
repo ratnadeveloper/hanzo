@@ -1365,7 +1365,7 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
     output_template = os.path.join(download_dir, f"{safe_name}.%(ext)s")
 
     ydl_opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "format": "bestaudio/best",
         "outtmpl": output_template,
         "quiet": True,
         "no_warnings": True,
