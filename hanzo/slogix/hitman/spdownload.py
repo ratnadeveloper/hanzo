@@ -1444,18 +1444,55 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
             "extra_opts": {
                 "extractor_args": {"youtube": {"player_client": ["web_creator"]}},
             },
+            "verify": False,
         },
         {
             "name": "SoundCloud",
             "url": f"scsearch1:{title} {artist}",
             "extra_opts": {},
+            "verify": True,  # Need to verify SoundCloud search results
         },
     ]
+
+    def _title_matches(found_title, want_title, want_artist):
+        """Check if SoundCloud result roughly matches the requested song."""
+        found = found_title.lower().strip()
+        want_t = want_title.lower().strip()
+        want_a = want_artist.lower().strip()
+        # Extract key words (3+ chars) from wanted title
+        import re as _re
+        want_words = [w for w in _re.findall(r'[a-z0-9]+', want_t) if len(w) >= 3]
+        # At least half the significant words should appear in the found title
+        if not want_words:
+            return True
+        found_clean = _re.sub(r'[^a-z0-9 ]', '', found)
+        matches = sum(1 for w in want_words if w in found_clean)
+        # Also check if artist appears
+        artist_words = [w for w in _re.findall(r'[a-z0-9]+', want_a) if len(w) >= 3]
+        artist_match = any(w in found_clean for w in artist_words) if artist_words else False
+        # Accept if >50% title words match, or if artist + any title word matches
+        return (matches / len(want_words) >= 0.5) or (artist_match and matches >= 1)
 
     for src in sources:
         try:
             opts = {**base_opts, **src["extra_opts"]}
             logger.info(f"yt-dlp trying {src['name']}: {src['url']}")
+
+            if src.get("verify"):
+                # Extract info first to verify title before downloading
+                check_opts = {**opts, "quiet": True, "no_warnings": True}
+                with yt_dlp.YoutubeDL(check_opts) as ydl:
+                    info = ydl.extract_info(src["url"], download=False)
+                    if info:
+                        found_title = info.get("title", "")
+                        if not _title_matches(found_title, title, artist):
+                            logger.warning(
+                                f"SoundCloud mismatch: wanted '{title}' by '{artist}', "
+                                f"got '{found_title}' — skipping"
+                            )
+                            continue
+                        logger.info(f"SoundCloud title verified: '{found_title}'")
+
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([src["url"]])
 
