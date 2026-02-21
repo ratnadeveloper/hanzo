@@ -1243,22 +1243,36 @@ async def innertube_search(title: str, artist: str, spotify_duration_ms: int = 0
                 if not vid_id:
                     continue
 
-                # Return the YouTube URL for yt-dlp to download.
-                # Direct googlevideo.com URLs return HTTP 403 (session-locked),
-                # so we use InnerTube only for search+matching, then yt-dlp
-                # for robust downloading.
+                # Try direct InnerTube audio extraction first
                 yt_url = f"https://www.youtube.com/watch?v={vid_id}"
-                logger.info(f"InnerTube matched: '{vid_title}' → {yt_url}")
-                return {
-                    "name": vid_title or title,
-                    "artist": vid_channel or artist,
-                    "duration": None,
-                    "download_url": yt_url,
-                    "quality": "YouTube",
-                    "video_id": vid_id,
-                    "image": None,
-                    "source": "innertube",
-                }
+                audio = await innertube_extract_audio(vid_id)
+                if audio and audio.get("download_url"):
+                    logger.info(f"InnerTube hit: '{vid_title}' ({audio['quality']})")
+                    return {
+                        "name": vid_title or title,
+                        "artist": vid_channel or artist,
+                        "duration": None,
+                        "download_url": audio["download_url"],
+                        "quality": audio["quality"],
+                        "video_id": vid_id,
+                        "yt_url": yt_url,
+                        "image": None,
+                        "source": "innertube",
+                    }
+                else:
+                    # No direct audio URL, return YT URL for yt-dlp fallback
+                    logger.info(f"InnerTube matched (no direct audio): '{vid_title}' → {yt_url}")
+                    return {
+                        "name": vid_title or title,
+                        "artist": vid_channel or artist,
+                        "duration": None,
+                        "download_url": yt_url,
+                        "quality": "YouTube",
+                        "video_id": vid_id,
+                        "yt_url": yt_url,
+                        "image": None,
+                        "source": "innertube",
+                    }
         except Exception as e:
             logger.error(f"InnerTube search error for '{query}': {e}")
 
@@ -1824,13 +1838,20 @@ async def spdownload_cmd(client: Client, message: Message):
                         song_info["download_url"], title, artist
                     )
                 elif source == "innertube":
-                    # InnerTube provides the YouTube URL; use yt-dlp to download
-                    # (direct googlevideo.com URLs return 403)
-                    innertube_yt_url = song_info.get("download_url", "")
-                    file_path = await loop.run_in_executor(
-                        thread_pool, hitman_download,
-                        innertube_yt_url, title, artist
-                    )
+                    # Try direct download first (works on some server IPs)
+                    dl_url = song_info.get("download_url", "")
+                    if "googlevideo.com" in dl_url:
+                        file_path = await piped_download(dl_url, title, artist)
+                    else:
+                        file_path = None
+                    # Fallback to yt-dlp if direct download failed
+                    if not file_path or not os.path.exists(file_path):
+                        fallback_url = song_info.get("yt_url") or dl_url
+                        logger.info(f"Direct download failed, trying yt-dlp: {fallback_url}")
+                        file_path = await loop.run_in_executor(
+                            thread_pool, hitman_download,
+                            fallback_url, title, artist
+                        )
                 else:
                     file_path = await loop.run_in_executor(
                         thread_pool, hitman_download,
