@@ -1454,24 +1454,36 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
         },
     ]
 
-    def _title_matches(found_title, want_title, want_artist):
-        """Check if SoundCloud result roughly matches the requested song."""
-        found = found_title.lower().strip()
-        want_t = want_title.lower().strip()
-        want_a = want_artist.lower().strip()
-        # Extract key words (3+ chars) from wanted title
+    def _title_matches(found_title, found_artist, want_title, want_artist):
+        """Check if SoundCloud result matches the requested song + artist."""
         import re as _re
-        want_words = [w for w in _re.findall(r'[a-z0-9]+', want_t) if len(w) >= 3]
-        # At least half the significant words should appear in the found title
-        if not want_words:
+
+        def _normalize(s):
+            return _re.sub(r'[^a-z0-9 ]', ' ', s.lower().strip())
+
+        found_t = _normalize(found_title)
+        found_a = _normalize(found_artist)
+        want_t = _normalize(want_title)
+        want_a = _normalize(want_artist)
+        found_all = f"{found_t} {found_a}"
+
+        # Extract significant keywords (3+ chars)
+        title_words = [w for w in want_t.split() if len(w) >= 3]
+        artist_words = [w for w in want_a.split() if len(w) >= 3]
+
+        if not title_words:
             return True
-        found_clean = _re.sub(r'[^a-z0-9 ]', '', found)
-        matches = sum(1 for w in want_words if w in found_clean)
-        # Also check if artist appears
-        artist_words = [w for w in _re.findall(r'[a-z0-9]+', want_a) if len(w) >= 3]
-        artist_match = any(w in found_clean for w in artist_words) if artist_words else False
-        # Accept if >50% title words match, or if artist + any title word matches
-        return (matches / len(want_words) >= 0.5) or (artist_match and matches >= 1)
+
+        # Count title word matches in found title OR found artist
+        title_hits = sum(1 for w in title_words if w in found_all)
+        # Count artist word matches in found title OR found artist
+        artist_hits = sum(1 for w in artist_words if w in found_all) if artist_words else 0
+
+        # STRICT: need >=50% title words AND at least 1 artist word
+        title_ok = title_hits / len(title_words) >= 0.5
+        artist_ok = artist_hits >= 1 if artist_words else True
+
+        return title_ok and artist_ok
 
     for src in sources:
         try:
@@ -1479,19 +1491,20 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
             logger.info(f"yt-dlp trying {src['name']}: {src['url']}")
 
             if src.get("verify"):
-                # Extract info first to verify title before downloading
+                # Extract info first to verify title + artist before downloading
                 check_opts = {**opts, "quiet": True, "no_warnings": True}
                 with yt_dlp.YoutubeDL(check_opts) as ydl:
                     info = ydl.extract_info(src["url"], download=False)
                     if info:
                         found_title = info.get("title", "")
-                        if not _title_matches(found_title, title, artist):
+                        found_artist = info.get("uploader", "") or info.get("artist", "")
+                        if not _title_matches(found_title, found_artist, title, artist):
                             logger.warning(
                                 f"SoundCloud mismatch: wanted '{title}' by '{artist}', "
-                                f"got '{found_title}' — skipping"
+                                f"got '{found_title}' by '{found_artist}' — skipping"
                             )
                             continue
-                        logger.info(f"SoundCloud title verified: '{found_title}'")
+                        logger.info(f"SoundCloud verified: '{found_title}' by '{found_artist}'")
 
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([src["url"]])
