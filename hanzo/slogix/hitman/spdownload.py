@@ -1467,6 +1467,16 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
         want_a = _normalize(want_artist)
         found_all = f"{found_t} {found_a}"
 
+        # ── Version tag mismatch check ──
+        # Reject if one has remix/vip/cover/bootleg/slowed but the other doesn't
+        version_tags = ["remix", "vip", "cover", "bootleg", "slowed", "reverb",
+                        "sped up", "bass boosted", "nightcore", "acoustic", "live"]
+        for tag in version_tags:
+            want_has = tag in want_t
+            found_has = tag in found_t
+            if want_has != found_has:
+                return False  # Version mismatch
+
         # Extract significant keywords (3+ chars)
         title_words = [w for w in want_t.split() if len(w) >= 3]
         artist_words = [w for w in want_a.split() if len(w) >= 3]
