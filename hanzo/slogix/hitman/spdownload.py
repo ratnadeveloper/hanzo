@@ -1027,87 +1027,142 @@ INNERTUBE_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"  # Public, embedde
 
 async def innertube_extract_audio(video_id: str):
     """
-    Call YouTube's InnerTube Player API directly with ANDROID client context.
-    This is how savefrom.net / save.tube access YouTube — same technique.
+    Call YouTube's InnerTube Player API with multiple client contexts.
+    Tries ANDROID, IOS, and TV_EMBEDDED to maximize chances on server IPs.
     Returns dict with download_url, quality, or None.
     """
-    payload = {
-        "videoId": video_id,
-        "context": {
-            "client": {
-                "clientName": "ANDROID",
-                "clientVersion": "19.29.37",
-                "androidSdkVersion": 34,
-                "hl": "en",
-                "gl": "US",
-                "userAgent": (
-                    "com.google.android.youtube/19.29.37 "
-                    "(Linux; U; Android 14; en_US) gzip"
-                ),
-            }
+    clients = [
+        {
+            "name": "ANDROID",
+            "payload": {
+                "context": {
+                    "client": {
+                        "clientName": "ANDROID",
+                        "clientVersion": "19.29.37",
+                        "androidSdkVersion": 34,
+                        "hl": "en",
+                        "gl": "US",
+                        "userAgent": "com.google.android.youtube/19.29.37 (Linux; U; Android 14; en_US) gzip",
+                    }
+                },
+            },
+            "headers": {
+                "User-Agent": "com.google.android.youtube/19.29.37 (Linux; U; Android 14; en_US) gzip",
+                "X-YouTube-Client-Name": "3",
+                "X-YouTube-Client-Version": "19.29.37",
+            },
         },
-        "playbackContext": {
-            "contentPlaybackContext": {
-                "html5Preference": "HTML5_PREF_WANTS",
-            }
+        {
+            "name": "IOS",
+            "payload": {
+                "context": {
+                    "client": {
+                        "clientName": "IOS",
+                        "clientVersion": "19.29.1",
+                        "deviceModel": "iPhone16,2",
+                        "hl": "en",
+                        "gl": "US",
+                    }
+                },
+            },
+            "headers": {
+                "User-Agent": "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)",
+                "X-YouTube-Client-Name": "5",
+                "X-YouTube-Client-Version": "19.29.1",
+            },
         },
-        "contentCheckOk": True,
-        "racyCheckOk": True,
-    }
+        {
+            "name": "TV_EMBEDDED",
+            "payload": {
+                "context": {
+                    "client": {
+                        "clientName": "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+                        "clientVersion": "2.0",
+                        "hl": "en",
+                        "gl": "US",
+                    },
+                    "thirdParty": {"embedUrl": "https://www.google.com"},
+                },
+            },
+            "headers": {
+                "User-Agent": "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.5)",
+                "X-YouTube-Client-Name": "85",
+                "X-YouTube-Client-Version": "2.0",
+            },
+        },
+    ]
 
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": (
-            "com.google.android.youtube/19.29.37 "
-            "(Linux; U; Android 14; en_US) gzip"
-        ),
-        "X-YouTube-Client-Name": "3",  # ANDROID
-        "X-YouTube-Client-Version": "19.29.37",
-    }
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{INNERTUBE_API_URL}?key={INNERTUBE_API_KEY}",
-                json=payload,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status != 200:
-                    logger.debug(f"InnerTube API returned {resp.status}")
-                    return None
-                data = await resp.json()
-
-        streaming = data.get("streamingData", {})
-        formats = streaming.get("adaptiveFormats", [])
-
-        # Find best audio-only stream
-        best = None
-        best_bitrate = 0
-        for fmt in formats:
-            mime = fmt.get("mimeType", "")
-            if "audio" not in mime:
-                continue
-            br = fmt.get("bitrate", 0)
-            url = fmt.get("url", "")
-            if not url:
-                # Some formats use signatureCipher instead of direct URL
-                continue
-            if br > best_bitrate:
-                best = fmt
-                best_bitrate = br
-
-        if best and best.get("url"):
-            quality = f"{best_bitrate // 1000}kbps" if best_bitrate else "128kbps"
-            logger.info(f"InnerTube audio found: {video_id} ({quality})")
-            return {
-                "download_url": best["url"],
-                "quality": quality,
-                "mime": best.get("mimeType", "audio/mp4"),
+    for client in clients:
+        try:
+            payload = {
+                **client["payload"],
+                "videoId": video_id,
+                "playbackContext": {
+                    "contentPlaybackContext": {
+                        "html5Preference": "HTML5_PREF_WANTS",
+                    }
+                },
+                "contentCheckOk": True,
+                "racyCheckOk": True,
             }
-    except Exception as e:
-        logger.error(f"InnerTube API error: {e}")
+            headers = {
+                "Content-Type": "application/json",
+                **client["headers"],
+            }
 
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{INNERTUBE_API_URL}?key={INNERTUBE_API_KEY}",
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status != 200:
+                        logger.debug(f"InnerTube {client['name']} returned {resp.status}")
+                        continue
+                    data = await resp.json()
+
+            status = data.get("playabilityStatus", {}).get("status", "?")
+            if status != "OK":
+                reason = data.get("playabilityStatus", {}).get("reason", "")
+                logger.debug(f"InnerTube {client['name']}: status={status} reason={reason[:60]}")
+                continue
+
+            streaming = data.get("streamingData", {})
+            formats = streaming.get("adaptiveFormats", [])
+
+            # Find best audio-only stream
+            best = None
+            best_bitrate = 0
+            for fmt in formats:
+                mime = fmt.get("mimeType", "")
+                if "audio" not in mime:
+                    continue
+                br = fmt.get("bitrate", 0)
+                url = fmt.get("url", "")
+                if not url:
+                    continue
+                if br > best_bitrate:
+                    best = fmt
+                    best_bitrate = br
+
+            if best and best.get("url"):
+                quality = f"{best_bitrate // 1000}kbps" if best_bitrate else "128kbps"
+                logger.info(f"InnerTube audio found via {client['name']}: {video_id} ({quality})")
+                return {
+                    "download_url": best["url"],
+                    "quality": quality,
+                    "mime": best.get("mimeType", "audio/mp4"),
+                    "client": client["name"],
+                }
+            else:
+                audio_count = sum(1 for f in formats if "audio" in f.get("mimeType", ""))
+                logger.debug(f"InnerTube {client['name']}: {audio_count} audio fmts, 0 with direct URL")
+
+        except Exception as e:
+            logger.error(f"InnerTube {client['name']} error: {e}")
+
+    logger.warning(f"InnerTube: no audio from any client for {video_id}")
     return None
 
 
@@ -1372,6 +1427,8 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
         "geo_bypass": True,
         "nocheckcertificate": True,
         "prefer_ffmpeg": True,
+        "no_check_formats": True,
+        "allow_unplayable_formats": True,
         # Use iOS + Android player clients to bypass bot detection on server IPs
         "extractor_args": {"youtube": {"player_client": ["ios", "android", "web"]}},
         "http_headers": {
