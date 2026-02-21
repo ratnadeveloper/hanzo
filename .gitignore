@@ -1,0 +1,52 @@
+# ─── Python ───────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ─── Environment & Secrets ────────────────
+.env
+.env.local
+*.env
+
+# ─── Virtual Environment ──────────────────
+venv/
+.venv/
+env/
+
+# ─── Downloads & Temp files ───────────────
+downloads/
+raw_files/
+*.mp3
+*.mp4
+*.m4a
+*.wav
+*.ogg
+*.webm
+*.part
+
+# ─── IDE ──────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ─── OS ───────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Logs ─────────────────────────────────
+*.log
+log.txt
+logs/
+
+# ─── Local-only files ─────────────────────
+project_progress_master.md
+.agent/
+test_*.py
+test_results.txt
