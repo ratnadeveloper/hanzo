@@ -1413,6 +1413,130 @@ async def slider_search(title: str, artist: str, spotify_duration_ms: int = 0):
     return None
 
 
+# ── Audiomack API search (hip-hop, Afrobeats, Caribbean) ──
+
+async def audiomack_search(title: str, artist: str, spotify_duration_ms: int = 0):
+    """
+    Search Audiomack for a song using their public API.
+    Great for hip-hop, rap, Afrobeats, Caribbean, and R&B.
+    """
+    ascii_title = _strip_accents(_clean_title(title))
+    first_artist = _strip_accents(
+        artist.split(",")[0].strip()) if "," in artist else _strip_accents(artist)
+
+    queries = [f'{ascii_title} {first_artist}', ascii_title]
+
+    for query in queries:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://api.audiomack.com/v1/music/search",
+                    params={"q": query, "type": "songs", "limit": 10},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json(content_type=None)
+
+                results = data.get("results", [])
+                for song in results:
+                    song_title = song.get("title", "")
+                    song_artist = song.get("artist", "") or song.get("uploader", {}).get("name", "")
+
+                    if not _is_match(title, song_title, artist, song_artist):
+                        continue
+
+                    if spotify_duration_ms > 0:
+                        a_dur = song.get("duration", 0)
+                        if a_dur:
+                            try:
+                                if abs(int(a_dur) - (spotify_duration_ms / 1000)) > 30:
+                                    continue
+                            except (ValueError, TypeError):
+                                pass
+
+                    stream_url = song.get("streaming_url") or song.get("url_slug")
+                    if stream_url:
+                        image_url = song.get("image") or song.get("image_base")
+                        logger.info(f"Audiomack hit via '{query}': {song_title}")
+                        return {
+                            "name": song_title or title,
+                            "artist": song_artist or artist,
+                            "duration": song.get("duration"),
+                            "download_url": stream_url,
+                            "quality": "128kbps",
+                            "image": image_url,
+                        }
+        except Exception as e:
+            logger.debug(f"Audiomack search error for '{query}': {e}")
+
+    return None
+
+
+# ── Musify.club search (Russian/CIS music + international) ──
+
+async def musify_search(title: str, artist: str, spotify_duration_ms: int = 0):
+    """
+    Search Musify.club for a song. Popular in Russia/CIS region.
+    Also has good international coverage for pop & electronic music.
+    """
+    ascii_title = _strip_accents(_clean_title(title))
+    first_artist = _strip_accents(
+        artist.split(",")[0].strip()) if "," in artist else _strip_accents(artist)
+
+    queries = [f'{ascii_title} {first_artist}', ascii_title]
+
+    for query in queries:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://musify.club/api/search",
+                    params={"searchText": query},
+                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json(content_type=None)
+
+                songs = data.get("songs", []) or data.get("tracks", [])
+                for song in songs:
+                    song_title = song.get("title", "") or song.get("name", "")
+                    song_artist = song.get("artist", "") or song.get("artistName", "")
+
+                    if not _is_match(title, song_title, artist, song_artist):
+                        continue
+
+                    if spotify_duration_ms > 0:
+                        m_dur = song.get("duration", 0)
+                        if m_dur:
+                            try:
+                                if abs(int(m_dur) - (spotify_duration_ms / 1000)) > 30:
+                                    continue
+                            except (ValueError, TypeError):
+                                pass
+
+                    stream_url = song.get("url") or song.get("downloadUrl")
+                    if stream_url:
+                        if stream_url.startswith("/"):
+                            stream_url = "https://musify.club" + stream_url
+                        image_url = song.get("image") or song.get("cover")
+                        logger.info(f"Musify hit via '{query}': {song_title}")
+                        return {
+                            "name": song_title or title,
+                            "artist": song_artist or artist,
+                            "duration": song.get("duration"),
+                            "download_url": stream_url,
+                            "quality": "320kbps",
+                            "image": image_url,
+                        }
+        except Exception as e:
+            logger.debug(f"Musify search error for '{query}': {e}")
+
+    return None
+
+
 # ── Piped API (open-source YouTube frontend — bypasses IP blocks) ──
 PIPED_INSTANCES = [
     "https://pipedapi.kavin.rocks",
@@ -2663,6 +2787,24 @@ async def spdownload_cmd(client: Client, message: Message):
                     if song_info:
                         source = "archive"
 
+                # Fallback 14: Audiomack (hip-hop, Afrobeats, Caribbean, R&B)
+                if not song_info and not yt_url:
+                    song_info = await audiomack_search(
+                        title=title, artist=artist,
+                        spotify_duration_ms=track.get("duration", 0),
+                    )
+                    if song_info:
+                        source = "audiomack"
+
+                # Fallback 15: Musify (Russian/CIS + international pop/electronic)
+                if not song_info and not yt_url:
+                    song_info = await musify_search(
+                        title=title, artist=artist,
+                        spotify_duration_ms=track.get("duration", 0),
+                    )
+                    if song_info:
+                        source = "musify"
+
                 if not song_info and not yt_url:
                     failed += 1
                     failed_list.append({"title": title, "artist": artist})
@@ -2686,6 +2828,8 @@ async def spdownload_cmd(client: Client, message: Message):
                     "itunes": "iTunes/Apple Music",
                     "slider": "Slider.kz",
                     "archive": "Internet Archive",
+                    "audiomack": "Audiomack",
+                    "musify": "Musify",
                     "youtube": "YouTube (yt-dlp)",
                 }
                 source_label = source_labels.get(source, source)
@@ -2698,7 +2842,7 @@ async def spdownload_cmd(client: Client, message: Message):
                     f"⏳ ETA: {eta}"
                 )
 
-                if source in ("jiosaavn", "deezer", "gaana", "wynk", "hungama", "jamendo", "itunes", "slider", "archive"):
+                if source in ("jiosaavn", "deezer", "gaana", "wynk", "hungama", "jamendo", "itunes", "slider", "archive", "audiomack", "musify"):
                     file_path = await jiosaavn_download(
                         song_info["download_url"], title, artist
                     )
