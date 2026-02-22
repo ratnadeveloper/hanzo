@@ -231,7 +231,7 @@ async def slogo_fetch_dc(sp_type, sp_id):
         return None
 
     try:
-        sp = spotipy.Spotify(auth=token, requests_timeout=10, retries=0)
+        sp = spotipy.Spotify(auth=token, requests_timeout=15, retries=5, backoff_factor=0.5)
 
         if sp_type == "track":
             track = sp.track(sp_id)
@@ -316,7 +316,7 @@ async def slogo_fetch_api(sp_type, sp_id):
         return None
 
     try:
-        sp = spotipy.Spotify(auth=token, requests_timeout=10, retries=0)
+        sp = spotipy.Spotify(auth=token, requests_timeout=15, retries=5, backoff_factor=0.5)
 
         if sp_type == "track":
             track = sp.track(sp_id)
