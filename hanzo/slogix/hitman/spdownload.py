@@ -2905,6 +2905,7 @@ async def spdownload_cmd(client: Client, message: Message):
                     "piped": "YouTube (Piped)",
                     "invidious": "YouTube (Invidious)",
                     "innertube": "YouTube (Direct)",
+                    "cobalt": "YouTube (Cobalt)",
                     "deezer": "Deezer",
                     "gaana": "Gaana",
                     "wynk": "Wynk Music",
@@ -2927,7 +2928,7 @@ async def spdownload_cmd(client: Client, message: Message):
                     f"⏳ ETA: {eta}"
                 )
 
-                if source in ("jiosaavn", "deezer", "gaana", "wynk", "hungama", "jamendo", "itunes", "slider", "archive", "audiomack", "musify"):
+                if source in ("jiosaavn", "cobalt", "deezer", "gaana", "wynk", "hungama", "jamendo", "itunes", "slider", "archive", "audiomack", "musify"):
                     file_path = await jiosaavn_download(
                         song_info["download_url"], title, artist
                     )
