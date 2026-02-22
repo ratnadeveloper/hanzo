@@ -2186,25 +2186,7 @@ async def spdownload_cmd(client: Client, message: Message):
                     if song_info:
                         source = "innertube"
 
-                # Fallback 5: Deezer (free API — huge international catalog)
-                if not song_info:
-                    song_info = await deezer_search(
-                        title=title, artist=artist,
-                        spotify_duration_ms=track.get("duration", 0),
-                    )
-                    if song_info:
-                        source = "deezer"
-
-                # Fallback 6: Gaana (Indian music — alternative to JioSaavn)
-                if not song_info:
-                    song_info = await gaana_search(
-                        title=title, artist=artist,
-                        spotify_duration_ms=track.get("duration", 0),
-                    )
-                    if song_info:
-                        source = "gaana"
-
-                # Fallback 7: YouTube/yt-dlp (with SoundCloud + Audiomack + Bandcamp)
+                # Fallback 5: YouTube/yt-dlp (with SoundCloud + Audiomack)
                 yt_url = None
                 if not song_info:
                     logger.info(f"All APIs failed, trying yt-dlp for: {artist} - {title}")
@@ -2212,6 +2194,24 @@ async def spdownload_cmd(client: Client, message: Message):
                     yt_url = await hitman_search(query, title=title, artist=artist)
                     if yt_url:
                         source = "youtube"
+
+                # Fallback 6: Deezer (free API — huge international catalog)
+                if not song_info and not yt_url:
+                    song_info = await deezer_search(
+                        title=title, artist=artist,
+                        spotify_duration_ms=track.get("duration", 0),
+                    )
+                    if song_info:
+                        source = "deezer"
+
+                # Fallback 7: Gaana (Indian music — alternative to JioSaavn)
+                if not song_info and not yt_url:
+                    song_info = await gaana_search(
+                        title=title, artist=artist,
+                        spotify_duration_ms=track.get("duration", 0),
+                    )
+                    if song_info:
+                        source = "gaana"
 
                 if not song_info and not yt_url:
                     failed += 1
