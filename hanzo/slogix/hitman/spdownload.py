@@ -1601,14 +1601,25 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
             opts = {**base_opts, **src["extra_opts"]}
             logger.info(f"yt-dlp trying {src['name']}: {src['url']}")
 
+            download_url = src["url"]  # Default: use source URL
+
             if src.get("verify"):
                 # Extract info first to verify title + artist before downloading
                 check_opts = {**opts, "quiet": True, "no_warnings": True}
                 with yt_dlp.YoutubeDL(check_opts) as ydl:
                     info = ydl.extract_info(src["url"], download=False)
                     if info:
-                        found_title = info.get("title", "")
-                        found_artist = info.get("uploader", "") or info.get("artist", "")
+                        # Handle playlist-style results from scsearch
+                        entry = info
+                        if "entries" in info:
+                            entries = list(info["entries"])
+                            entry = entries[0] if entries else None
+                        if not entry:
+                            logger.warning(f"{src['name']} returned no results")
+                            continue
+
+                        found_title = entry.get("title", "")
+                        found_artist = entry.get("uploader", "") or entry.get("artist", "")
                         if not _title_matches(found_title, found_artist, title, artist):
                             logger.warning(
                                 f"SoundCloud mismatch: wanted '{title}' by '{artist}', "
@@ -1616,9 +1627,13 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
                             )
                             continue
                         logger.info(f"SoundCloud verified: '{found_title}' by '{found_artist}'")
+                        # Use the actual track URL instead of re-searching
+                        actual_url = entry.get("webpage_url") or entry.get("url")
+                        if actual_url:
+                            download_url = actual_url
 
             with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([src["url"]])
+                ydl.download([download_url])
 
             # Check if file was downloaded
             expected = os.path.join(download_dir, f"{safe_name}.mp3")
