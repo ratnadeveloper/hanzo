@@ -565,9 +565,13 @@ except ImportError:
 
 
 def _clean_title(title: str) -> str:
-    """Strip feat/remix/remaster tags and special chars for cleaner search."""
+    """Strip feat/remix/remaster tags, movie tags, language tags and special chars for cleaner search."""
+    # Remove (From "Movie Name") / [From 'Movie'] — Bollywood/Tollywood style
+    cleaned = re.sub(r'\s*[\(\[]\s*(?:from)\s+["\'\u201c\u201d]?[^\)\]]+["\'\u201c\u201d]?\s*[\)\]]', '', title, flags=re.IGNORECASE)
     # Remove (feat. ...), [feat. ...], (ft. ...), (with ...), (Remix), [TECHNO], etc.
-    cleaned = re.sub(r'\s*[\(\[](?:feat\.?|ft\.?|with|prod\.?|remix|remaster(?:ed)?|deluxe|bonus|techno|house|edm|trance|acoustic|live|version|edit|original|mix|radio)[^\)\]]*[\)\]]', '', title, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s*[\(\[](?:feat\.?|ft\.?|with|prod\.?|remix|remaster(?:ed)?|deluxe|bonus|techno|house|edm|trance|acoustic|live|version|edit|original|mix|radio)[^\)\]]*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    # Remove language tags like (Telugu), (Hindi), (Tamil), [Kannada] etc.
+    cleaned = re.sub(r'\s*[\(\[](?:Telugu|Hindi|Tamil|Kannada|Malayalam|Bengali|Marathi|Punjabi|Gujarati|English|Spanish|French|Korean|Japanese)[\)\]]', '', cleaned, flags=re.IGNORECASE)
     # Remove trailing " - ..." like " - Radio Edit", " - Acoustic"
     cleaned = re.sub(r'\s*-\s*(?:radio edit|acoustic|live|remix|remaster(?:ed)?).*$', '', cleaned, flags=re.IGNORECASE)
     # Remove special characters that confuse search
