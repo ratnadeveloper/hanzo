@@ -1011,6 +1011,196 @@ async def gaana_search(title: str, artist: str, spotify_duration_ms: int = 0):
     return None
 
 
+# ── Wynk Music search (Airtel's Indian music platform) ──
+
+async def wynk_search(title: str, artist: str, spotify_duration_ms: int = 0):
+    """
+    Search Wynk Music for a song. Uses Wynk's public web API.
+    Great for Indian regional music (Hindi, Telugu, Tamil, Punjabi, etc.)
+    """
+    ascii_title = _strip_accents(_clean_title(title))
+    first_artist = _strip_accents(
+        artist.split(",")[0].strip()) if "," in artist else _strip_accents(artist)
+
+    queries = [f'{ascii_title} {first_artist}', ascii_title]
+
+    for query in queries:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://content.wynk.in/music/v3/search",
+                    params={"q": query, "type": "song", "count": 10},
+                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json()
+
+                items = data.get("data", {}).get("items", []) or data.get("items", [])
+                for song in items:
+                    song_title = song.get("title", "")
+                    song_artist = song.get("subtitle", "") or song.get("artistName", "")
+
+                    if not _is_match(title, song_title, artist, song_artist):
+                        continue
+
+                    if spotify_duration_ms > 0:
+                        w_dur = song.get("duration", 0)
+                        if w_dur:
+                            try:
+                                if abs(int(w_dur) - (spotify_duration_ms / 1000)) > 30:
+                                    continue
+                            except (ValueError, TypeError):
+                                pass
+
+                    stream_url = song.get("url") or song.get("streamUrl")
+                    if stream_url:
+                        image_url = song.get("largeImage") or song.get("image")
+                        logger.info(f"Wynk hit via '{query}': {song_title}")
+                        return {
+                            "name": song_title or title,
+                            "artist": song_artist or artist,
+                            "duration": song.get("duration"),
+                            "download_url": stream_url,
+                            "quality": "128kbps",
+                            "image": image_url,
+                        }
+        except Exception as e:
+            logger.debug(f"Wynk search error for '{query}': {e}")
+
+    return None
+
+
+# ── Hungama Music search (Indian music catalog) ──
+
+async def hungama_search(title: str, artist: str, spotify_duration_ms: int = 0):
+    """
+    Search Hungama Music for a song. Uses Hungama's web search API.
+    Good for Bollywood, regional Indian music, and devotional songs.
+    """
+    ascii_title = _strip_accents(_clean_title(title))
+    first_artist = _strip_accents(
+        artist.split(",")[0].strip()) if "," in artist else _strip_accents(artist)
+
+    queries = [f'{ascii_title} {first_artist}', ascii_title]
+
+    for query in queries:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://www.hungama.com/ws/search/song",
+                    params={"searchStr": query, "limit": 10},
+                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json()
+
+                songs = data if isinstance(data, list) else data.get("data", [])
+                for song in songs:
+                    song_title = song.get("title", "") or song.get("song_name", "")
+                    song_artist = song.get("singer", "") or song.get("artist_name", "")
+
+                    if not _is_match(title, song_title, artist, song_artist):
+                        continue
+
+                    if spotify_duration_ms > 0:
+                        h_dur = song.get("duration", 0)
+                        if h_dur:
+                            try:
+                                if abs(int(h_dur) - (spotify_duration_ms / 1000)) > 30:
+                                    continue
+                            except (ValueError, TypeError):
+                                pass
+
+                    stream_url = song.get("listen_link") or song.get("stream_url")
+                    if stream_url:
+                        image_url = song.get("image") or song.get("img_500x500")
+                        logger.info(f"Hungama hit via '{query}': {song_title}")
+                        return {
+                            "name": song_title or title,
+                            "artist": song_artist or artist,
+                            "duration": song.get("duration"),
+                            "download_url": stream_url,
+                            "quality": "128kbps",
+                            "image": image_url,
+                        }
+        except Exception as e:
+            logger.debug(f"Hungama search error for '{query}': {e}")
+
+    return None
+
+
+# ── Jamendo search (international Creative Commons music) ──
+
+async def jamendo_search(title: str, artist: str, spotify_duration_ms: int = 0):
+    """
+    Search Jamendo for a song using their free public API.
+    Jamendo has CC-licensed music — great for indie/alternative/electronic.
+    No API key needed for search (uses client_id=demo).
+    """
+    ascii_title = _strip_accents(_clean_title(title))
+    first_artist = _strip_accents(
+        artist.split(",")[0].strip()) if "," in artist else _strip_accents(artist)
+
+    queries = [f'{ascii_title} {first_artist}', ascii_title]
+
+    for query in queries:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://api.jamendo.com/v3.0/tracks/",
+                    params={
+                        "client_id": "b6747d04",
+                        "format": "json",
+                        "limit": 10,
+                        "search": query,
+                        "include": "musicinfo",
+                        "audioformat": "mp32",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json()
+
+                results = data.get("results", [])
+                for song in results:
+                    song_title = song.get("name", "")
+                    song_artist = song.get("artist_name", "")
+
+                    if not _is_match(title, song_title, artist, song_artist):
+                        continue
+
+                    if spotify_duration_ms > 0:
+                        j_dur = song.get("duration", 0)
+                        if j_dur:
+                            try:
+                                if abs(int(j_dur) - (spotify_duration_ms / 1000)) > 30:
+                                    continue
+                            except (ValueError, TypeError):
+                                pass
+
+                    audio_url = song.get("audiodownload") or song.get("audio")
+                    if audio_url:
+                        image_url = song.get("image") or song.get("album_image")
+                        logger.info(f"Jamendo hit via '{query}': {song_title} by {song_artist}")
+                        return {
+                            "name": song_title or title,
+                            "artist": song_artist or artist,
+                            "duration": song.get("duration"),
+                            "download_url": audio_url,
+                            "quality": "192kbps",
+                            "image": image_url,
+                        }
+        except Exception as e:
+            logger.debug(f"Jamendo search error for '{query}': {e}")
+
+    return None
+
+
 # ── Piped API (open-source YouTube frontend — bypasses IP blocks) ──
 PIPED_INSTANCES = [
     "https://pipedapi.kavin.rocks",
@@ -2207,10 +2397,37 @@ async def spdownload_cmd(client: Client, message: Message):
                     if song_info:
                         source = "gaana"
 
+                # Fallback 8: Wynk Music (Airtel — Indian regional music)
+                if not song_info and not yt_url:
+                    song_info = await wynk_search(
+                        title=title, artist=artist,
+                        spotify_duration_ms=track.get("duration", 0),
+                    )
+                    if song_info:
+                        source = "wynk"
+
+                # Fallback 9: Hungama (Bollywood, regional Indian, devotional)
+                if not song_info and not yt_url:
+                    song_info = await hungama_search(
+                        title=title, artist=artist,
+                        spotify_duration_ms=track.get("duration", 0),
+                    )
+                    if song_info:
+                        source = "hungama"
+
+                # Fallback 10: Jamendo (Creative Commons — indie/alternative)
+                if not song_info and not yt_url:
+                    song_info = await jamendo_search(
+                        title=title, artist=artist,
+                        spotify_duration_ms=track.get("duration", 0),
+                    )
+                    if song_info:
+                        source = "jamendo"
+
                 if not song_info and not yt_url:
                     failed += 1
                     failed_list.append({"title": title, "artist": artist})
-                    logger.warning(f"All 10 sources failed for '{artist} - {title}'")
+                    logger.warning(f"All sources failed for '{artist} - {title}'")
                     continue
 
                 # ── Download from selected source ──
@@ -2224,6 +2441,9 @@ async def spdownload_cmd(client: Client, message: Message):
                     "innertube": "YouTube (Direct)",
                     "deezer": "Deezer",
                     "gaana": "Gaana",
+                    "wynk": "Wynk Music",
+                    "hungama": "Hungama",
+                    "jamendo": "Jamendo",
                     "youtube": "YouTube (yt-dlp)",
                 }
                 source_label = source_labels.get(source, source)
@@ -2236,7 +2456,7 @@ async def spdownload_cmd(client: Client, message: Message):
                     f"⏳ ETA: {eta}"
                 )
 
-                if source in ("jiosaavn", "deezer", "gaana"):
+                if source in ("jiosaavn", "deezer", "gaana", "wynk", "hungama", "jamendo"):
                     file_path = await jiosaavn_download(
                         song_info["download_url"], title, artist
                     )
