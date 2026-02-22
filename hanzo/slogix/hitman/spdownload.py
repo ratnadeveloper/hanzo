@@ -863,7 +863,150 @@ async def saavn_api_search(title: str, artist: str, spotify_duration_ms: int = 0
                         "image": image_url,
                     }
         except Exception as e:
-            logger.error(f"saavn.dev API error for '{query}': {e}")
+                logger.error(f"saavn.dev API error for '{query}': {e}")
+
+    return None
+
+
+# ── Deezer search (free public API — huge international catalog) ──
+
+async def deezer_search(title: str, artist: str, spotify_duration_ms: int = 0):
+    """
+    Search Deezer for a song using the free public API.
+    Returns 128kbps preview URL (30s previews are skipped; full tracks only).
+    Deezer API: https://api.deezer.com/search
+    """
+    ascii_title = _strip_accents(_clean_title(title))
+    first_artist = _strip_accents(
+        artist.split(",")[0].strip()) if "," in artist else _strip_accents(artist)
+
+    queries = [
+        f'{ascii_title} {first_artist}',
+        f'{ascii_title} {_strip_accents(artist)}',
+        ascii_title,
+    ]
+
+    for query in queries:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://api.deezer.com/search",
+                    params={"q": query, "limit": 10, "order": "RANKING"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json()
+
+                results = data.get("data", [])
+                for song in results:
+                    song_title = song.get("title", "")
+                    song_artist_name = song.get("artist", {}).get("name", "")
+
+                    # Verify match
+                    if not _is_match(title, song_title, artist, song_artist_name):
+                        continue
+
+                    # Duration check
+                    if spotify_duration_ms > 0:
+                        deezer_dur = song.get("duration", 0)
+                        if deezer_dur and abs(deezer_dur - (spotify_duration_ms / 1000)) > 30:
+                            continue
+
+                    # Deezer provides 30-second previews via preview URL
+                    preview_url = song.get("preview")
+                    if preview_url:
+                        album_cover = song.get("album", {}).get("cover_big") or song.get("album", {}).get("cover_medium")
+                        logger.info(f"Deezer hit via '{query}': {song_title} by {song_artist_name}")
+                        return {
+                            "name": song_title or title,
+                            "artist": song_artist_name or artist,
+                            "duration": song.get("duration"),
+                            "download_url": preview_url,
+                            "quality": "128kbps",
+                            "image": album_cover,
+                        }
+        except Exception as e:
+            logger.debug(f"Deezer search error for '{query}': {e}")
+
+    return None
+
+
+# ── Gaana search (Indian music catalog — alternative to JioSaavn) ──
+
+async def gaana_search(title: str, artist: str, spotify_duration_ms: int = 0):
+    """
+    Search Gaana.com for a song. Uses their public web API.
+    Good for Bollywood, Tollywood, and regional Indian music.
+    """
+    ascii_title = _strip_accents(_clean_title(title))
+    first_artist = _strip_accents(
+        artist.split(",")[0].strip()) if "," in artist else _strip_accents(artist)
+
+    queries = [
+        f'{ascii_title} {first_artist}',
+        ascii_title,
+    ]
+
+    for query in queries:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://gaana.com/apiv2",
+                    params={
+                        "type": "search",
+                        "subtype": "search_song",
+                        "key": query,
+                        "content_filter": "1",
+                        "include": "allItems",
+                    },
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json()
+
+                tracks = data.get("gr", [])
+                for group in tracks:
+                    for song in group.get("gd", []):
+                        song_title = song.get("title", "") or song.get("seo", "")
+                        song_artist = song.get("artist", "") or song.get("albumartist", "")
+
+                        if not _is_match(title, song_title, artist, song_artist):
+                            continue
+
+                        # Duration check
+                        if spotify_duration_ms > 0:
+                            gaana_dur = song.get("duration", 0)
+                            if gaana_dur:
+                                try:
+                                    if abs(int(gaana_dur) - (spotify_duration_ms / 1000)) > 30:
+                                        continue
+                                except (ValueError, TypeError):
+                                    pass
+
+                        # Get stream URL
+                        stream_urls = song.get("urls", {})
+                        download_url = (
+                            stream_urls.get("high_quality")
+                            or stream_urls.get("medium_quality")
+                            or stream_urls.get("low_quality")
+                        )
+                        if download_url:
+                            image_url = song.get("artwork_large") or song.get("artwork")
+                            quality = "320kbps" if stream_urls.get("high_quality") else "128kbps"
+                            logger.info(f"Gaana hit via '{query}': {song_title} ({quality})")
+                            return {
+                                "name": song_title or title,
+                                "artist": song_artist or artist,
+                                "duration": song.get("duration"),
+                                "download_url": download_url,
+                                "quality": quality,
+                                "image": image_url,
+                            }
+        except Exception as e:
+            logger.debug(f"Gaana search error for '{query}': {e}")
 
     return None
 
@@ -1553,6 +1696,12 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
             "extra_opts": {},
             "verify": True,  # Need to verify SoundCloud search results
         },
+        {
+            "name": "Audiomack",
+            "url": f"https://audiomack.com/search?q={title} {artist}",
+            "extra_opts": {},
+            "verify": True,
+        },
     ]
 
     def _title_matches(found_title, found_artist, want_title, want_artist):
@@ -2037,7 +2186,25 @@ async def spdownload_cmd(client: Client, message: Message):
                     if song_info:
                         source = "innertube"
 
-                # Fallback 5: YouTube/yt-dlp (with Android player client bypass)
+                # Fallback 5: Deezer (free API — huge international catalog)
+                if not song_info:
+                    song_info = await deezer_search(
+                        title=title, artist=artist,
+                        spotify_duration_ms=track.get("duration", 0),
+                    )
+                    if song_info:
+                        source = "deezer"
+
+                # Fallback 6: Gaana (Indian music — alternative to JioSaavn)
+                if not song_info:
+                    song_info = await gaana_search(
+                        title=title, artist=artist,
+                        spotify_duration_ms=track.get("duration", 0),
+                    )
+                    if song_info:
+                        source = "gaana"
+
+                # Fallback 7: YouTube/yt-dlp (with SoundCloud + Audiomack + Bandcamp)
                 yt_url = None
                 if not song_info:
                     logger.info(f"All APIs failed, trying yt-dlp for: {artist} - {title}")
@@ -2049,7 +2216,7 @@ async def spdownload_cmd(client: Client, message: Message):
                 if not song_info and not yt_url:
                     failed += 1
                     failed_list.append({"title": title, "artist": artist})
-                    logger.warning(f"All 6 sources failed for '{artist} - {title}'")
+                    logger.warning(f"All 10 sources failed for '{artist} - {title}'")
                     continue
 
                 # ── Download from selected source ──
@@ -2061,6 +2228,8 @@ async def spdownload_cmd(client: Client, message: Message):
                     "piped": "YouTube (Piped)",
                     "invidious": "YouTube (Invidious)",
                     "innertube": "YouTube (Direct)",
+                    "deezer": "Deezer",
+                    "gaana": "Gaana",
                     "youtube": "YouTube (yt-dlp)",
                 }
                 source_label = source_labels.get(source, source)
@@ -2073,7 +2242,7 @@ async def spdownload_cmd(client: Client, message: Message):
                     f"⏳ ETA: {eta}"
                 )
 
-                if source == "jiosaavn":
+                if source in ("jiosaavn", "deezer", "gaana"):
                     file_path = await jiosaavn_download(
                         song_info["download_url"], title, artist
                     )
