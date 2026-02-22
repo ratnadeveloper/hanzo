@@ -2085,18 +2085,20 @@ async def innertube_search(title: str, artist: str, spotify_duration_ms: int = 0
                         "source": "innertube",
                     }
                 else:
-                    # No direct audio URL, return YT URL for yt-dlp fallback
+                    # No direct audio — DON'T return song_info!
+                    # Return just the YouTube URL so the caller can try
+                    # other API sources first, then fall back to yt-dlp
                     logger.info(f"InnerTube matched (no direct audio): '{vid_title}' → {yt_url}")
                     return {
                         "name": vid_title or title,
                         "artist": vid_channel or artist,
                         "duration": None,
-                        "download_url": yt_url,
+                        "download_url": None,  # No audio URL!
                         "quality": "YouTube",
                         "video_id": vid_id,
-                        "yt_url": yt_url,
+                        "yt_url": yt_url,  # Keep YT URL for last-resort
                         "image": None,
-                        "source": "innertube",
+                        "source": "innertube_noaudio",  # Mark as no-audio
                     }
         except Exception as e:
             logger.error(f"InnerTube search error for '{query}': {e}")
@@ -2698,13 +2700,26 @@ async def spdownload_cmd(client: Client, message: Message):
                         source = "invidious"
 
                 # Fallback 4: InnerTube (direct YouTube API — like savefrom.net)
+                innertube_yt_url = None  # Save YT URL for last-resort
                 if not song_info:
-                    song_info = await innertube_search(
+                    it_result = await innertube_search(
                         title=title, artist=artist,
                         spotify_duration_ms=track.get("duration", 0),
                     )
-                    if song_info:
-                        source = "innertube"
+                    if it_result:
+                        if it_result.get("source") == "innertube_noaudio":
+                            # Found on YouTube but can't extract audio
+                            # Save URL for last-resort yt-dlp, but DON'T
+                            # set song_info — let API sources 6-16 try first
+                            innertube_yt_url = it_result.get("yt_url")
+                            logger.info(
+                                f"InnerTube: saved YT URL for last-resort, "
+                                f"trying API sources first..."
+                            )
+                        else:
+                            # Got direct audio — use it
+                            song_info = it_result
+                            source = "innertube"
 
                 # Fallback 5: YouTube/yt-dlp (with SoundCloud)
                 yt_url = None
@@ -2804,6 +2819,16 @@ async def spdownload_cmd(client: Client, message: Message):
                     )
                     if song_info:
                         source = "musify"
+
+                # ── Last resort: try yt-dlp with InnerTube's YouTube URL ──
+                # Only if ALL 16 API sources failed AND InnerTube found a video
+                if not song_info and not yt_url and innertube_yt_url:
+                    logger.info(
+                        f"All API sources failed, last-resort yt-dlp: "
+                        f"{innertube_yt_url}"
+                    )
+                    yt_url = innertube_yt_url
+                    source = "youtube"
 
                 if not song_info and not yt_url:
                     failed += 1
