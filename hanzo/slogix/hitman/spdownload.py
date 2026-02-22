@@ -570,8 +570,24 @@ def _clean_title(title: str) -> str:
     cleaned = re.sub(r'\s*[\(\[]\s*(?:from)\s+["\'\u201c\u201d]?[^\)\]]+["\'\u201c\u201d]?\s*[\)\]]', '', title, flags=re.IGNORECASE)
     # Remove (feat. ...), [feat. ...], (ft. ...), (with ...), (Remix), [TECHNO], etc.
     cleaned = re.sub(r'\s*[\(\[](?:feat\.?|ft\.?|with|prod\.?|remix|remaster(?:ed)?|deluxe|bonus|techno|house|edm|trance|acoustic|live|version|edit|original|mix|radio)[^\)\]]*[\)\]]', '', cleaned, flags=re.IGNORECASE)
-    # Remove language tags like (Telugu), (Hindi), (Tamil), [Kannada] etc.
-    cleaned = re.sub(r'\s*[\(\[](?:Telugu|Hindi|Tamil|Kannada|Malayalam|Bengali|Marathi|Punjabi|Gujarati|English|Spanish|French|Korean|Japanese)[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    # Remove language tags like (Telugu), (Hindi), (Tamil), [Arabic], (Korean) etc.
+    _langs = (
+        # Indian languages
+        "Telugu|Hindi|Tamil|Kannada|Malayalam|Bengali|Marathi|Punjabi|Gujarati|"
+        "Urdu|Odia|Assamese|Bhojpuri|Rajasthani|Haryanvi|Sanskrit|Konkani|"
+        # European languages
+        "English|Spanish|French|German|Italian|Portuguese|Dutch|Swedish|Norwegian|"
+        "Danish|Finnish|Polish|Czech|Romanian|Hungarian|Greek|Bulgarian|Croatian|"
+        "Serbian|Slovak|Slovenian|Ukrainian|Russian|Turkish|Catalan|Basque|Galician|"
+        # Middle Eastern / African
+        "Arabic|Persian|Farsi|Hebrew|Swahili|Amharic|Yoruba|Igbo|Zulu|Afrikaans|"
+        # East Asian / Southeast Asian
+        "Korean|Japanese|Chinese|Mandarin|Cantonese|Thai|Vietnamese|Indonesian|"
+        "Malay|Filipino|Tagalog|Burmese|Khmer|Lao|Mongolian|Tibetan|"
+        # Others
+        "Nepali|Sinhala|Georgian|Armenian|Azerbaijani|Kazakh|Uzbek|Latin"
+    )
+    cleaned = re.sub(rf'\s*[\(\[](?:{_langs})[\)\]]', '', cleaned, flags=re.IGNORECASE)
     # Remove trailing " - ..." like " - Radio Edit", " - Acoustic"
     cleaned = re.sub(r'\s*-\s*(?:radio edit|acoustic|live|remix|remaster(?:ed)?).*$', '', cleaned, flags=re.IGNORECASE)
     # Remove special characters that confuse search
