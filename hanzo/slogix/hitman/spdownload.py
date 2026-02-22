@@ -2805,91 +2805,19 @@ async def spdownload_cmd(client: Client, message: Message):
                     if song_info:
                         source = "musify"
 
-                # ── RETRY with simplified title when all sources fail ──
-                if not song_info and not yt_url:
-                    # Deep clean the title: strip Remix, Chill, VIP, Lofi,
-                    # movie tags, version tags, and special characters
-                    import unicodedata
-                    clean_t = re.sub(
-                        r'\s*[\(\[].*?[\)\]]', '', title
-                    )  # Remove ALL parenthesized content
-                    clean_t = re.sub(
-                        r'\s*-\s*(Remix|Chill|VIP|Lofi|Lo-Fi|Slowed|'
-                        r'Reverb|Bass Boosted|8D|Sped Up|Fast|'
-                        r'Radio Edit|Acoustic|Live|Extended|'
-                        r'Instrumental|Karaoke|Cover|Mashup|'
-                        r'Nightcore|Daycore|Club Mix|Dub Mix).*$',
-                        '', clean_t, flags=re.IGNORECASE,
-                    )
-                    # Normalize special chars (ROSÉ → ROSE, RŮDE → RUDE)
-                    clean_a = unicodedata.normalize('NFD', artist)
-                    clean_a = re.sub(r'[\u0300-\u036f]', '', clean_a)
-                    clean_t = clean_t.strip(' -–—')
-                    if not clean_t:
-                        clean_t = title  # Fallback if cleaning emptied it
-
-                    # Only retry if the cleaned title is different
-                    if clean_t.lower() != title.lower() or clean_a.lower() != artist.lower():
-                        logger.info(
-                            f"Retrying with simplified: '{clean_a} - {clean_t}' "
-                            f"(original: '{artist} - {title}')"
-                        )
-                        retry_dur = track.get("duration", 0)
-
-                        # Retry 1: JioSaavn (best for Indian music)
-                        song_info = await jiosaavn_search(
-                            title=clean_t, artist=clean_a,
-                            spotify_duration_ms=retry_dur,
-                        )
-                        if song_info:
-                            source = "jiosaavn"
-
-                        # Retry 2: Piped (YouTube proxy, no IP block)
-                        if not song_info:
-                            song_info = await piped_search(
-                                title=clean_t, artist=clean_a,
-                                spotify_duration_ms=retry_dur,
-                            )
-                            if song_info:
-                                source = "piped"
-
-                        # Retry 3: iTunes (huge catalog, reliable)
-                        if not song_info:
-                            song_info = await itunes_search(
-                                title=clean_t, artist=clean_a,
-                                spotify_duration_ms=retry_dur,
-                            )
-                            if song_info:
-                                source = "itunes"
-
-                        # Retry 4: Slider.kz (aggregator, 320kbps)
-                        if not song_info:
-                            song_info = await slider_search(
-                                title=clean_t, artist=clean_a,
-                                spotify_duration_ms=retry_dur,
-                            )
-                            if song_info:
-                                source = "slider"
-
-                        # Retry 5: SoundCloud via yt-dlp (relaxed search)
-                        if not song_info:
-                            query = f"{clean_a} - {clean_t} audio"
-                            yt_url = await hitman_search(
-                                query, title=clean_t, artist=clean_a
-                            )
-                            if yt_url:
-                                source = "youtube"
-
-                        if song_info or yt_url:
-                            logger.info(
-                                f"Retry SUCCESS for '{clean_a} - {clean_t}' "
-                                f"via {source}"
-                            )
-
                 if not song_info and not yt_url:
                     failed += 1
                     failed_list.append({"title": title, "artist": artist})
                     logger.warning(f"All sources failed for '{artist} - {title}'")
+                    # Notify user in Telegram immediately
+                    await status.update(
+                        f"❌ **Song not found across 16 sources:**\n"
+                        f"🎵 `{artist} - {title}`\n\n"
+                        f"📊 Progress: ✅ {success} uploaded · ❌ {failed} failed · "
+                        f"📦 {total - i} remaining",
+                        force=True,
+                    )
+                    await asyncio.sleep(2)  # Let user see the message
                     continue
 
                 # ── Download from selected source ──
