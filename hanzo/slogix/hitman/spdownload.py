@@ -1201,6 +1201,218 @@ async def jamendo_search(title: str, artist: str, spotify_duration_ms: int = 0):
     return None
 
 
+# ── iTunes Search API (Apple's free API — massive international catalog) ──
+
+async def itunes_search(title: str, artist: str, spotify_duration_ms: int = 0):
+    """
+    Search iTunes/Apple Music for a song preview using the free Search API.
+    Returns 30-second AAC preview URL. Huge catalog — all genres, all countries.
+    API: https://itunes.apple.com/search
+    """
+    ascii_title = _strip_accents(_clean_title(title))
+    first_artist = _strip_accents(
+        artist.split(",")[0].strip()) if "," in artist else _strip_accents(artist)
+
+    queries = [
+        f'{ascii_title} {first_artist}',
+        f'{ascii_title} {_strip_accents(artist)}',
+        ascii_title,
+    ]
+
+    for query in queries:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://itunes.apple.com/search",
+                    params={
+                        "term": query,
+                        "media": "music",
+                        "entity": "song",
+                        "limit": 10,
+                    },
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json(content_type=None)
+
+                results = data.get("results", [])
+                for song in results:
+                    song_title = song.get("trackName", "")
+                    song_artist = song.get("artistName", "")
+
+                    if not _is_match(title, song_title, artist, song_artist):
+                        continue
+
+                    # Duration check (iTunes gives duration in ms)
+                    if spotify_duration_ms > 0:
+                        itunes_dur_ms = song.get("trackTimeMillis", 0)
+                        if itunes_dur_ms:
+                            if abs(itunes_dur_ms - spotify_duration_ms) > 30000:
+                                continue
+
+                    preview_url = song.get("previewUrl")
+                    if preview_url:
+                        artwork = song.get("artworkUrl100", "")
+                        # Get higher resolution artwork
+                        if artwork:
+                            artwork = artwork.replace("100x100", "600x600")
+                        logger.info(f"iTunes hit via '{query}': {song_title} by {song_artist}")
+                        return {
+                            "name": song_title or title,
+                            "artist": song_artist or artist,
+                            "duration": song.get("trackTimeMillis", 0) // 1000 if song.get("trackTimeMillis") else None,
+                            "download_url": preview_url,
+                            "quality": "256kbps",
+                            "image": artwork,
+                        }
+        except Exception as e:
+            logger.debug(f"iTunes search error for '{query}': {e}")
+
+    return None
+
+
+# ── Internet Archive search (free open music library) ──
+
+async def archive_search(title: str, artist: str, spotify_duration_ms: int = 0):
+    """
+    Search Internet Archive for music. Free, no API key needed.
+    Good for classical, jazz, live recordings, and obscure tracks.
+    API: https://archive.org/advancedsearch.php
+    """
+    ascii_title = _strip_accents(_clean_title(title))
+    first_artist = _strip_accents(
+        artist.split(",")[0].strip()) if "," in artist else _strip_accents(artist)
+
+    query = f'{ascii_title} {first_artist}'
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://archive.org/advancedsearch.php",
+                params={
+                    "q": f'title:"{ascii_title}" AND creator:"{first_artist}" AND mediatype:audio',
+                    "fl[]": "identifier,title,creator,description",
+                    "rows": 5,
+                    "page": 1,
+                    "output": "json",
+                },
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+
+            docs = data.get("response", {}).get("docs", [])
+            for doc in docs:
+                doc_title = doc.get("title", "")
+                doc_artist = doc.get("creator", "")
+                if isinstance(doc_artist, list):
+                    doc_artist = ", ".join(doc_artist)
+
+                if not _is_match(title, doc_title, artist, doc_artist):
+                    continue
+
+                identifier = doc.get("identifier")
+                if identifier:
+                    # Get file list for this item
+                    async with session.get(
+                        f"https://archive.org/metadata/{identifier}/files",
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as file_resp:
+                        if file_resp.status != 200:
+                            continue
+                        files_data = await file_resp.json()
+
+                    files = files_data.get("result", [])
+                    for f in files:
+                        fname = f.get("name", "")
+                        if fname.lower().endswith((".mp3", ".ogg", ".flac")):
+                            download_url = f"https://archive.org/download/{identifier}/{fname}"
+                            logger.info(f"Archive hit: {doc_title} by {doc_artist}")
+                            return {
+                                "name": doc_title or title,
+                                "artist": doc_artist or artist,
+                                "duration": None,
+                                "download_url": download_url,
+                                "quality": "VBR",
+                                "image": f"https://archive.org/services/img/{identifier}",
+                            }
+    except Exception as e:
+        logger.debug(f"Archive search error: {e}")
+
+    return None
+
+
+# ── Slider.kz search (music aggregator/search engine) ──
+
+async def slider_search(title: str, artist: str, spotify_duration_ms: int = 0):
+    """
+    Search Slider.kz for a song. Music search engine/aggregator.
+    Returns direct MP3 download links. Good international coverage.
+    """
+    ascii_title = _strip_accents(_clean_title(title))
+    first_artist = _strip_accents(
+        artist.split(",")[0].strip()) if "," in artist else _strip_accents(artist)
+
+    queries = [f'{ascii_title} {first_artist}', ascii_title]
+
+    for query in queries:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://slider.kz/vk_auth.php",
+                    params={"q": query},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json(content_type=None)
+
+                audios = data.get("audios", {})
+                items = audios if isinstance(audios, list) else audios.get("", [])
+                for song in items:
+                    song_title = song.get("tit_art", "").split(" - ")
+                    if len(song_title) >= 2:
+                        s_artist = song_title[0].strip()
+                        s_title = song_title[1].strip()
+                    else:
+                        s_title = song_title[0].strip() if song_title else ""
+                        s_artist = ""
+
+                    if not _is_match(title, s_title, artist, s_artist):
+                        continue
+
+                    # Duration check
+                    if spotify_duration_ms > 0:
+                        s_dur = song.get("duration", 0)
+                        if s_dur:
+                            try:
+                                if abs(int(s_dur) - (spotify_duration_ms / 1000)) > 30:
+                                    continue
+                            except (ValueError, TypeError):
+                                pass
+
+                    dl_url = song.get("url")
+                    if dl_url:
+                        if dl_url.startswith("//"):
+                            dl_url = "https:" + dl_url
+                        logger.info(f"Slider hit via '{query}': {s_title} by {s_artist}")
+                        return {
+                            "name": s_title or title,
+                            "artist": s_artist or artist,
+                            "duration": song.get("duration"),
+                            "download_url": dl_url,
+                            "quality": "320kbps",
+                            "image": None,
+                        }
+        except Exception as e:
+            logger.debug(f"Slider search error for '{query}': {e}")
+
+    return None
+
+
 # ── Piped API (open-source YouTube frontend — bypasses IP blocks) ──
 PIPED_INSTANCES = [
     "https://pipedapi.kavin.rocks",
@@ -2424,6 +2636,33 @@ async def spdownload_cmd(client: Client, message: Message):
                     if song_info:
                         source = "jamendo"
 
+                # Fallback 11: iTunes/Apple Music (huge international catalog)
+                if not song_info and not yt_url:
+                    song_info = await itunes_search(
+                        title=title, artist=artist,
+                        spotify_duration_ms=track.get("duration", 0),
+                    )
+                    if song_info:
+                        source = "itunes"
+
+                # Fallback 12: Slider.kz (music aggregator — 320kbps MP3)
+                if not song_info and not yt_url:
+                    song_info = await slider_search(
+                        title=title, artist=artist,
+                        spotify_duration_ms=track.get("duration", 0),
+                    )
+                    if song_info:
+                        source = "slider"
+
+                # Fallback 13: Internet Archive (free open music library)
+                if not song_info and not yt_url:
+                    song_info = await archive_search(
+                        title=title, artist=artist,
+                        spotify_duration_ms=track.get("duration", 0),
+                    )
+                    if song_info:
+                        source = "archive"
+
                 if not song_info and not yt_url:
                     failed += 1
                     failed_list.append({"title": title, "artist": artist})
@@ -2444,6 +2683,9 @@ async def spdownload_cmd(client: Client, message: Message):
                     "wynk": "Wynk Music",
                     "hungama": "Hungama",
                     "jamendo": "Jamendo",
+                    "itunes": "iTunes/Apple Music",
+                    "slider": "Slider.kz",
+                    "archive": "Internet Archive",
                     "youtube": "YouTube (yt-dlp)",
                 }
                 source_label = source_labels.get(source, source)
@@ -2456,7 +2698,7 @@ async def spdownload_cmd(client: Client, message: Message):
                     f"⏳ ETA: {eta}"
                 )
 
-                if source in ("jiosaavn", "deezer", "gaana", "wynk", "hungama", "jamendo"):
+                if source in ("jiosaavn", "deezer", "gaana", "wynk", "hungama", "jamendo", "itunes", "slider", "archive"):
                     file_path = await jiosaavn_download(
                         song_info["download_url"], title, artist
                     )
