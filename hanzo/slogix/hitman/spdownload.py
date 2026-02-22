@@ -1537,6 +1537,52 @@ async def musify_search(title: str, artist: str, spotify_duration_ms: int = 0):
     return None
 
 
+# ── Cobalt API (open-source YouTube downloader — full audio, no sign-in) ──
+COBALT_INSTANCES = [
+    "https://api.cobalt.tools",
+    "https://cobalt-api.kwiatekmiki.com",
+    "https://cobalt.api.timelessnesses.me",
+    "https://api.cobalt.best",
+]
+
+
+async def cobalt_download(youtube_url: str):
+    """
+    Download full audio from a YouTube URL using Cobalt API.
+    Returns direct audio download URL, or None if all instances fail.
+    Unlike Piped/Invidious, Cobalt doesn't need sign-in or cookies.
+    """
+    for base in COBALT_INSTANCES:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{base}/",
+                    json={
+                        "url": youtube_url,
+                        "downloadMode": "audio",
+                        "audioFormat": "mp3",
+                    },
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json(content_type=None)
+                    audio_url = data.get("url")
+                    if audio_url:
+                        logger.info(
+                            f"Cobalt: got audio URL from {base} for {youtube_url}"
+                        )
+                        return audio_url
+        except Exception as e:
+            logger.debug(f"Cobalt instance {base} failed: {e}")
+            continue
+    return None
+
+
 # ── Piped API (open-source YouTube frontend — bypasses IP blocks) ──
 PIPED_INSTANCES = [
     "https://pipedapi.kavin.rocks",
@@ -2214,7 +2260,7 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
             "name": "YouTube",
             "url": yt_url,
             "extra_opts": {
-                "extractor_args": {"youtube": {"player_client": ["web_creator"]}},
+                "extractor_args": {"youtube": {"player_client": ["tv_embedded"]}},
             },
             "verify": False,
         },
@@ -2709,13 +2755,28 @@ async def spdownload_cmd(client: Client, message: Message):
                     if it_result:
                         if it_result.get("source") == "innertube_noaudio":
                             # Found on YouTube but can't extract audio
-                            # Save URL for last-resort yt-dlp, but DON'T
-                            # set song_info — let API sources 6-16 try first
                             innertube_yt_url = it_result.get("yt_url")
-                            logger.info(
-                                f"InnerTube: saved YT URL for last-resort, "
-                                f"trying API sources first..."
-                            )
+                            # Try Cobalt API first — downloads full audio
+                            # from YouTube without sign-in or cookies
+                            cobalt_url = await cobalt_download(innertube_yt_url)
+                            if cobalt_url:
+                                song_info = {
+                                    "name": it_result.get("name") or title,
+                                    "artist": it_result.get("artist") or artist,
+                                    "duration": None,
+                                    "download_url": cobalt_url,
+                                    "quality": "128kbps",
+                                    "image": None,
+                                    "source": "cobalt",
+                                }
+                                source = "cobalt"
+                                logger.info(
+                                    f"Cobalt success for '{title}' via {innertube_yt_url}"
+                                )
+                            else:
+                                logger.info(
+                                    "InnerTube: Cobalt failed, trying API sources..."
+                                )
                         else:
                             # Got direct audio — use it
                             song_info = it_result
@@ -2730,14 +2791,9 @@ async def spdownload_cmd(client: Client, message: Message):
                     if yt_url:
                         source = "youtube"
 
-                # Fallback 6: Deezer (free API — huge international catalog)
-                if not song_info and not yt_url:
-                    song_info = await deezer_search(
-                        title=title, artist=artist,
-                        spotify_duration_ms=track.get("duration", 0),
-                    )
-                    if song_info:
-                        source = "deezer"
+                # Fallback 6: Deezer — DISABLED (only 30-second previews)
+                # Deezer's free API only returns 30s preview clips, not full songs.
+                # This caused songs to upload as 30s audio with metadata errors.
 
                 # Fallback 7: Gaana (Indian music — alternative to JioSaavn)
                 if not song_info and not yt_url:
@@ -2775,14 +2831,9 @@ async def spdownload_cmd(client: Client, message: Message):
                     if song_info:
                         source = "jamendo"
 
-                # Fallback 11: iTunes/Apple Music (huge international catalog)
-                if not song_info and not yt_url:
-                    song_info = await itunes_search(
-                        title=title, artist=artist,
-                        spotify_duration_ms=track.get("duration", 0),
-                    )
-                    if song_info:
-                        source = "itunes"
+                # Fallback 11: iTunes — DISABLED (only 30-second previews)
+                # iTunes's free API only returns 30s AAC preview clips.
+                # Same problem as Deezer — songs upload as 30s audio.
 
                 # Fallback 12: Slider.kz (music aggregator — 320kbps MP3)
                 if not song_info and not yt_url:
