@@ -863,7 +863,7 @@ async def saavn_api_search(title: str, artist: str, spotify_duration_ms: int = 0
                         "image": image_url,
                     }
         except Exception as e:
-                logger.error(f"saavn.dev API error for '{query}': {e}")
+            logger.error(f"saavn.dev API error for '{query}': {e}")
 
     return None
 
@@ -1695,12 +1695,6 @@ def hitman_download(yt_url: str, title: str, artist: str, download_dir: str = "d
             "url": f"scsearch1:{title} {artist}",
             "extra_opts": {},
             "verify": True,  # Need to verify SoundCloud search results
-        },
-        {
-            "name": "Audiomack",
-            "url": f"https://audiomack.com/search?q={title} {artist}",
-            "extra_opts": {},
-            "verify": True,
         },
     ]
 
