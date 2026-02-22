@@ -190,32 +190,113 @@ async def crushbit_dc_token():
 
 # ─── Get anonymous token from embed page (fallback) ──────────────────
 
+# Cached anonymous token
+_anon_token_cache = {"token": None, "expires": 0}
+
 async def crushbit_token():
-    """Get an anonymous access token from Spotify embed page."""
+    """Get an anonymous access token from Spotify using multiple methods.
+    
+    Tries in order:
+      1. Spotify client token API (most reliable)
+      2. Embed page scraping (fallback)
+      3. get_access_token endpoint (last resort)
+    """
+    # Return cached token if still valid
+    now = time.time()
+    if _anon_token_cache["token"] and _anon_token_cache["expires"] > now + 60:
+        return _anon_token_cache["token"]
+
+    # Method 1: Spotify's client token API — used by web player
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://clienttoken.spotify.com/v1/clienttoken",
+                json={
+                    "client_data": {
+                        "client_version": "1.2.46.25.g5765fae4",
+                        "client_id": "d8a5ed958d274c2e8ee717e6a4b0971d",
+                        "js_sdk_data": {},
+                    }
+                },
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    client_token = data.get("granted_token", {}).get("token", "")
+                    if client_token:
+                        logger.info("Got Spotify client token (method 1)")
+                        # Client token isn't directly usable for API — need to get access token
+                        # Fall through to method 2/3
+    except Exception as e:
+        logger.debug(f"Client token API error: {e}")
+
+    # Method 2: Embed page scraping — extract access token from embed HTML
     test_ids = [
-        "37i9dQZF1DXcBWIGoYBM5M",
-        "37i9dQZF1DX0XUsuxWHRQd",
-        "37i9dQZF1DWWMOmoXKqHTD",
+        "37i9dQZF1DXcBWIGoYBM5M",  # Today's Top Hits
+        "37i9dQZF1DX0XUsuxWHRQd",  # RapCaviar
+        "37i9dQZF1DWWMOmoXKqHTD",  # Songs to Sing in the Car
+        "37i9dQZF1DX4WYpdgoIcn6",  # Chill Hits
+        "37i9dQZF1DX1lVhptIYRda",  # Hot Country
     ]
     for pid in test_ids:
         try:
             async with aiohttp.ClientSession() as session:
                 embed_url = f"https://open.spotify.com/embed/playlist/{pid}"
-                async with session.get(embed_url, headers=EMBED_HEADERS) as resp:
+                async with session.get(embed_url, headers=EMBED_HEADERS,
+                                       timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
+                        logger.debug(f"Embed page {pid} status: {resp.status}")
                         continue
                     text = await resp.text()
-                for script in re.findall(r"<script[^>]*>(.*?)</script>", text, re.DOTALL):
-                    if '"props"' in script and len(script) > 500:
+                scripts = re.findall(r"<script[^>]*>(.*?)</script>", text, re.DOTALL)
+                for script in scripts:
+                    if '"accessToken"' in script and len(script) > 200:
                         try:
                             data = json.loads(script.strip())
-                            token = data["props"]["pageProps"]["state"]["settings"]["session"]["accessToken"]
+                            # Try multiple JSON paths for the token
+                            token = None
+                            try:
+                                token = data["props"]["pageProps"]["state"]["settings"]["session"]["accessToken"]
+                            except (KeyError, TypeError):
+                                pass
+                            if not token:
+                                try:
+                                    token = data.get("props", {}).get("accessToken")
+                                except (KeyError, TypeError):
+                                    pass
                             if token:
+                                _anon_token_cache["token"] = token
+                                _anon_token_cache["expires"] = now + 3500
+                                logger.info(f"Got anonymous embed token from {pid}")
                                 return token
-                        except (json.JSONDecodeError, KeyError):
+                        except (json.JSONDecodeError, KeyError) as e:
+                            logger.debug(f"Token parse failed for {pid}: {e}")
                             continue
-        except Exception:
+                logger.debug(f"No token in {len(scripts)} scripts for {pid}")
+        except Exception as e:
+            logger.debug(f"Embed token error for {pid}: {e}")
             continue
+
+    # Method 3: get_access_token endpoint (may need cookies but try without)
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = "https://open.spotify.com/get_access_token?reason=transport&productType=web_player"
+            async with session.get(url, headers=EMBED_HEADERS,
+                                   timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    token = data.get("accessToken")
+                    if token:
+                        expires_ms = data.get("accessTokenExpirationTimestampMs", 0)
+                        _anon_token_cache["token"] = token
+                        _anon_token_cache["expires"] = expires_ms / 1000.0 if expires_ms else now + 3500
+                        logger.info("Got anonymous token from get_access_token")
+                        return token
+    except Exception as e:
+        logger.debug(f"get_access_token error: {e}")
+
+    logger.warning("Failed to get anonymous Spotify token from all methods")
     return None
 
 
@@ -381,7 +462,7 @@ async def slogo_fetch_api(sp_type, sp_id):
             return tracks
 
     except Exception as e:
-        logger.warning(f"Embed API fetch failed: {e}")
+        logger.warning(f"Embed API fetch failed for {sp_type}/{sp_id}: {e}")
         return None
 
 
