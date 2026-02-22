@@ -2706,7 +2706,7 @@ async def spdownload_cmd(client: Client, message: Message):
                     if song_info:
                         source = "innertube"
 
-                # Fallback 5: YouTube/yt-dlp (with SoundCloud + Audiomack)
+                # Fallback 5: YouTube/yt-dlp (with SoundCloud)
                 yt_url = None
                 if not song_info:
                     logger.info(f"All APIs failed, trying yt-dlp for: {artist} - {title}")
